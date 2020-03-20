@@ -545,10 +545,14 @@ class btree_node {
     return params_type::key(fields_.values[i]);
   }
   reference value(int i) {
-    return reinterpret_cast<reference>(fields_.values[i]);
+    // Have to cast via a char* to avoid strict aliasing warnings in gcc, possibly others.
+    char* p = reinterpret_cast<char*>(&(fields_.values[i]));
+    return reinterpret_cast<reference>(*p);
   }
   const_reference value(int i) const {
-    return reinterpret_cast<const_reference>(fields_.values[i]);
+    // Have to cast via a char* to avoid strict aliasing warnings in gcc, possibly others.
+    const char* p = reinterpret_cast<const char*>(&(fields_.values[i]));
+    return reinterpret_cast<const_reference>(*p);
   }
   mutable_value_type* mutable_value(int i) {
     return &fields_.values[i];
