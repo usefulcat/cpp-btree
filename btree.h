@@ -793,6 +793,12 @@ struct btree_iterator {
     return node != x.node || position != x.position;
   }
 
+  btree_iterator& operator=(const btree_iterator &x) noexcept {
+    node = x.node;
+    position = x.position;
+    return *this;
+  }
+
   // Accessors for the key/value the iterator is pointing at.
   const key_type& key() const {
     return node->key(position);
