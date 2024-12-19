@@ -99,9 +99,11 @@ class btree_container {
   void swap(self_type &x) {
     tree_.swap(x.tree_);
   }
+#ifndef BTREE_NO_IOSTREAM
   void dump(std::ostream &os) const {
     tree_.dump(os);
   }
+#endif
   void verify() const {
     tree_.verify();
   }
@@ -133,9 +135,11 @@ class btree_container {
     return true;
   }
 
+#if !(defined(__cplusplus) && __cplusplus >= 202002L)
   bool operator!=(const self_type& other) const {
     return !operator==(other);
   }
+#endif
 
   // Functor retrieval
   key_compare key_comp() const { return tree_.key_comp(); }
@@ -144,11 +148,13 @@ class btree_container {
   Tree tree_;
 };
 
+#ifndef BTREE_NO_IOSTREAM
 template <typename T>
 inline std::ostream& operator<<(std::ostream &os, const btree_container<T> &b) {
   b.dump(os);
   return os;
 }
+#endif
 
 // A common base class for btree_set and safe_btree_set.
 template <typename Tree>
@@ -195,6 +201,9 @@ class btree_unique_container : public btree_container<Tree> {
   }
   size_type count(const key_type &key) const {
     return this->tree_.count_unique(key);
+  }
+  bool contains(const key_type &key) const {
+    return this->count(key) > 0;
   }
 
   // Insertion routines.
@@ -314,6 +323,9 @@ class btree_multi_container : public btree_container<Tree> {
   }
   size_type count(const key_type &key) const {
     return this->tree_.count_multi(key);
+  }
+  bool contains(const key_type &key) const {
+    return this->find(key) != this->end();
   }
 
   // Insertion routines.

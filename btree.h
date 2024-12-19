@@ -106,14 +106,17 @@
 #include <sys/types.h>
 #include <algorithm>
 #include <functional>
-#include <iostream>
 #include <iterator>
 #include <limits>
 #include <type_traits>
 #include <new>
-#include <ostream>
 #include <string>
 #include <utility>
+
+#ifndef BTREE_NO_IOSTREAM
+#include <iostream>
+#include <ostream>
+#endif
 
 namespace btree {
 
@@ -148,9 +151,6 @@ struct big_ {
   char dummy[2];
 };
 
-// A compile-time assertion.
-#define COMPILE_ASSERT(expr, msg) static_assert(expr, #msg)
-
 // A helper type used to indicate that a key-compare-to functor has been
 // provided. A user can specify a key-compare-to functor by doing:
 //
@@ -162,7 +162,7 @@ struct big_ {
 //  };
 //
 // Note that the return type is an int and not a bool. There is a
-// COMPILE_ASSERT which enforces this return type.
+// static_assert which enforces this return type.
 struct btree_key_compare_to_tag {
 };
 
@@ -188,6 +188,7 @@ struct btree_key_compare_to_adapter : Compare {
   btree_key_compare_to_adapter(const btree_key_compare_to_adapter<Compare> &c)
       : Compare(c) {
   }
+  btree_key_compare_to_adapter &operator=(const btree_key_compare_to_adapter &) = default;
 };
 
 template <>
@@ -200,6 +201,7 @@ struct btree_key_compare_to_adapter<std::less<std::string> >
   int operator()(const std::string &a, const std::string &b) const {
     return a.compare(b);
   }
+  btree_key_compare_to_adapter &operator=(const btree_key_compare_to_adapter &) = default;
 };
 
 template <>
@@ -212,6 +214,7 @@ struct btree_key_compare_to_adapter<std::greater<std::string> >
   int operator()(const std::string &a, const std::string &b) const {
     return b.compare(a);
   }
+  btree_key_compare_to_adapter &operator=(const btree_key_compare_to_adapter &) = default;
 };
 
 // A helper class that allows a compare-to functor to behave like a plain
@@ -317,6 +320,13 @@ struct btree_map_params
     btree_swap_helper(a->first, b->first);
     btree_swap_helper(a->second, b->second);
   }
+  static void move_assign(mutable_value_type *to, mutable_value_type *from) {
+   to->first = std::move(from->first);
+   to->second = std::move(from->second);
+  }
+  static void move_construct_at(mutable_value_type *at, mutable_value_type *from) {
+    new (at) mutable_value_type(std::move(from->first), std::move(from->second));
+  }
 };
 
 // A parameters structure for holding the type parameters for a btree_set.
@@ -340,6 +350,12 @@ struct btree_set_params
   static const Key& key(const value_type &x) { return x; }
   static void swap(mutable_value_type *a, mutable_value_type *b) {
     btree_swap_helper<mutable_value_type>(*a, *b);
+  }
+  static void move_assign(mutable_value_type *to, mutable_value_type *from) {
+   *to = std::move(*from);
+  }
+  static void move_construct_at(mutable_value_type *at, mutable_value_type *from) {
+    new (at) mutable_value_type(std::move(*from));
   }
 };
 
@@ -492,22 +508,34 @@ class btree_node {
   struct leaf_fields : public base_fields {
     // The array of values. Only the first count of these values have been
     // constructed and are valid.
-    mutable_value_type values[kNodeValues];
+    union {
+        mutable_value_type values[kNodeValues];
+        value_type non_mutable_values[kNodeValues];
+    };
+
+    ~leaf_fields() = delete;
   };
+  static_assert(sizeof(leaf_fields::values) == sizeof(leaf_fields::non_mutable_values), "leaf_fields union size mismatch");
 
   struct internal_fields : public leaf_fields {
     // The array of child pointers. The keys in children_[i] are all less than
     // key(i). The keys in children_[i + 1] are all greater than key(i). There
     // are always count + 1 children.
     btree_node *children[kNodeValues + 1];
+
+    ~internal_fields() = delete;
   };
 
   struct root_fields : public internal_fields {
     btree_node *rightmost;
     size_type size;
+
+    ~root_fields() = delete;
   };
 
  public:
+  ~btree_node() = delete;
+
   // Getter/setter for whether this is a leaf node or not. This value doesn't
   // change after the node is created.
   bool leaf() const { return fields_.leaf; }
@@ -545,14 +573,10 @@ class btree_node {
     return params_type::key(fields_.values[i]);
   }
   reference value(int i) {
-    // Have to cast via a char* to avoid strict aliasing warnings in gcc, possibly others.
-    char* p = reinterpret_cast<char*>(&(fields_.values[i]));
-    return reinterpret_cast<reference>(*p);
+    return fields_.non_mutable_values[i];
   }
   const_reference value(int i) const {
-    // Have to cast via a char* to avoid strict aliasing warnings in gcc, possibly others.
-    const char* p = reinterpret_cast<const char*>(&(fields_.values[i]));
-    return reinterpret_cast<const_reference>(*p);
+    return fields_.non_mutable_values[i];
   }
   mutable_value_type* mutable_value(int i) {
     return &fields_.values[i];
@@ -561,6 +585,16 @@ class btree_node {
   // Swap value i in this node with value j in node x.
   void value_swap(int i, btree_node *x, int j) {
     params_type::swap(mutable_value(i), x->mutable_value(j));
+  }
+
+  // Move assign value i in this node from value j in node x.
+  void value_move(int i, btree_node *x, int j) {
+    params_type::move_assign(mutable_value(i), x->mutable_value(j));
+  }
+
+  // Move construct value i in this node from value j in node x.
+  void value_move_construct(int i, btree_node *x, int j) {
+    params_type::move_construct_at(mutable_value(i), x->mutable_value(j));
   }
 
   // Getters/setter for the child at position i in the node.
@@ -716,9 +750,6 @@ public:
   }
 
  private:
-  void value_init(int i) {
-    new (&fields_.values[i]) mutable_value_type;
-  }
   template <typename... Args>
   void value_init_args(int i, Args&&... args) {
     new (&fields_.values[i]) mutable_value_type(std::forward<Args>(args)...);
@@ -774,6 +805,8 @@ struct btree_iterator {
         position(x.position) {
   }
 
+  btree_iterator &operator=(const btree_iterator &) = default;
+
   // Increment/decrement the iterator.
   void increment() {
     if (node->leaf() && ++position < node->count()) {
@@ -792,12 +825,18 @@ struct btree_iterator {
   }
   void decrement_slow();
 
+#if defined(__cplusplus) && __cplusplus >= 202002L
+  friend bool operator==(const btree_iterator &a, const btree_iterator &b) noexcept {
+    return a.node == b.node && a.position == b.position;
+  }
+#else
   bool operator==(const const_iterator &x) const {
     return node == x.node && position == x.position;
   }
   bool operator!=(const const_iterator &x) const {
     return node != x.node || position != x.position;
   }
+#endif
 
   btree_iterator& operator=(const btree_iterator &x) noexcept {
     node = x.node;
@@ -1148,6 +1187,7 @@ class btree : public Params::key_compare {
     return btree_compare_keys(key_comp(), x, y);
   }
 
+#ifndef BTREE_NO_IOSTREAM
   // Dump the btree to the specified ostream. Requires that operator<< is
   // defined for Key and Value.
   void dump(std::ostream &os) const {
@@ -1155,6 +1195,7 @@ class btree : public Params::key_compare {
       internal_dump(os, root(), 0);
     }
   }
+#endif
 
   // Verifies the structure of the btree.
   void verify() const;
@@ -1279,7 +1320,8 @@ class btree : public Params::key_compare {
   }
   node_type* new_leaf_node(node_type *parent) {
     leaf_fields *p = reinterpret_cast<leaf_fields*>(
-        mutable_internal_allocator()->allocate(sizeof(leaf_fields)));
+        mutable_internal_allocator()->allocate(
+            sizeof(base_fields) + kNodeValues * sizeof(value_type)));
     return node_type::init_leaf(p, parent, kNodeValues);
   }
   node_type* new_leaf_root_node(int max_count) {
@@ -1385,8 +1427,10 @@ class btree : public Params::key_compare {
   // Deletes a node and all of its children.
   void internal_clear(node_type *node);
 
+#ifndef BTREE_NO_IOSTREAM
   // Dumps a node and all of its children to the specified ostream.
   void internal_dump(std::ostream &os, const node_type *node, int level) const;
+#endif
 
   // Verifies the tree structure of node.
   int internal_verify(const node_type *node,
@@ -1422,6 +1466,8 @@ class btree : public Params::key_compare {
   // A never instantiated helper function that returns the key comparison
   // functor.
   static key_compare key_compare_helper();
+  // A never instantiated helper function that returns a const key_type &.
+  static const key_type &key_type_helper();
 
   // Verify that key_compare returns a bool. This is similar to the way
   // is_convertible in base/type_traits.h works. Note that key_compare_checker
@@ -1429,20 +1475,20 @@ class btree : public Params::key_compare {
   // key_compare_checker() to instantiate and then figure out the size of the
   // return type of key_compare_checker() at compile time which we then check
   // against the sizeof of big_.
-  COMPILE_ASSERT(
-      sizeof(key_compare_checker(key_compare_helper()(key_type(), key_type()))) ==
+  static_assert(
+      sizeof(key_compare_checker(key_compare_helper()(key_type_helper(), key_type_helper()))) ==
       sizeof(big_),
-      key_comparison_function_must_return_bool);
+      "key_comparison_function_must_return_bool");
 
   // Note: We insist on kTargetValues, which is computed from
   // Params::kTargetNodeSize, must fit the base_fields::field_type.
-  COMPILE_ASSERT(kNodeValues <
+  static_assert(kNodeValues <
                  (1 << (8 * sizeof(typename base_fields::field_type))),
-                 target_node_size_too_large);
+                 "target_node_size_too_large");
 
   // Test the assumption made in setting kNodeValueSpace.
-  COMPILE_ASSERT(sizeof(base_fields) >= 2 * sizeof(void*),
-                 node_space_assumption_incorrect);
+  static_assert(sizeof(base_fields) >= 2 * sizeof(void*),
+                 "node_space_assumption_incorrect");
 };
 
 ////
@@ -1450,14 +1496,19 @@ class btree : public Params::key_compare {
 template <typename P> template <typename... Args>
 inline void btree_node<P>::insert_value(int i, Args&&... args) {
   assert(i <= count());
-  value_init_args(count(), std::forward<Args>(args)...);
   insert_value_common(i);
+  value_init_args(i, std::forward<Args>(args)...);
 }
 
 template <typename P>
 inline void btree_node<P>::insert_value_common(int i) {
-  for (int j = count(); j > i; --j) {
-    value_swap(j, this, j - 1);
+  if (i < count()) {
+    // invariant: count() > 0 because i >= 0
+    value_move_construct(count(), this, count() - 1);
+    for (int j = count() - 1; j > i; --j) {
+      value_move(j, this, j - 1);
+    }
+    value_destroy(i);
   }
   set_count(count() + 1);
 
@@ -1484,7 +1535,7 @@ inline void btree_node<P>::remove_value(int i) {
 
   set_count(count() - 1);
   for (; i < count(); ++i) {
-    value_swap(i, this, i + 1);
+    value_move(i, this, i + 1);
   }
   value_destroy(i);
 }
@@ -1497,23 +1548,18 @@ void btree_node<P>::rebalance_right_to_left(btree_node *src, int to_move) {
   assert(to_move >= 1);
   assert(to_move <= src->count());
 
-  // Make room in the left node for the new values.
-  for (int i = 0; i < to_move; ++i) {
-    value_init(i + count());
-  }
-
   // Move the delimiting value to the left node and the new delimiting value
   // from the right node.
-  value_swap(count(), parent(), position());
-  parent()->value_swap(position(), src, to_move - 1);
+  value_move_construct(count(), parent(), position());
+  parent()->value_move(position(), src, to_move - 1);
 
   // Move the values from the right to the left node.
   for (int i = 1; i < to_move; ++i) {
-    value_swap(count() + i, src, i - 1);
+    value_move_construct(count() + i, src, i - 1);
   }
   // Shift the values in the right node to their correct position.
   for (int i = to_move; i < src->count(); ++i) {
-    src->value_swap(i - to_move, src, i);
+    src->value_move(i - to_move, src, i);
   }
   for (int i = 1; i <= to_move; ++i) {
     src->value_destroy(src->count() - i);
@@ -1545,22 +1591,20 @@ void btree_node<P>::rebalance_left_to_right(btree_node *dest, int to_move) {
   assert(to_move <= count());
 
   // Make room in the right node for the new values.
-  for (int i = 0; i < to_move; ++i) {
-    dest->value_init(i + dest->count());
-  }
   for (int i = dest->count() - 1; i >= 0; --i) {
-    dest->value_swap(i, dest, i + to_move);
+    dest->value_move_construct(i + to_move, dest, i);
+    dest->value_destroy(i);
   }
 
   // Move the delimiting value to the right node and the new delimiting value
   // from the left node.
-  dest->value_swap(to_move - 1, parent(), position());
-  parent()->value_swap(position(), this, count() - to_move);
+  dest->value_move_construct(to_move - 1, parent(), position());
+  parent()->value_move(position(), this, count() - to_move);
   value_destroy(count() - to_move);
 
   // Move the values from the left to the right node.
   for (int i = 1; i < to_move; ++i) {
-    value_swap(count() - to_move + i, dest, i - 1);
+    dest->value_move_construct(i - 1, this, count() - to_move + i);
     value_destroy(count() - to_move + i);
   }
 
@@ -1601,16 +1645,17 @@ void btree_node<P>::split(btree_node *dest, int insert_position) {
 
   // Move values from the left sibling to the right sibling.
   for (int i = 0; i < dest->count(); ++i) {
-    dest->value_init(i);
-    value_swap(count() + i, dest, i);
+    dest->value_move_construct(i, this, count() + i);
     value_destroy(count() + i);
   }
 
   // The split key is the largest value in the left sibling.
   set_count(count() - 1);
-  parent()->insert_value(position());
-  value_swap(count(), parent(), position());
+
+  parent()->insert_value_common(position());
+  parent()->value_move_construct(position(), this, count());
   value_destroy(count());
+
   parent()->set_child(position() + 1, dest);
 
   if (!leaf()) {
@@ -1628,13 +1673,11 @@ void btree_node<P>::merge(btree_node *src) {
   assert(position() + 1 == src->position());
 
   // Move the delimiting value to the left node.
-  value_init(count());
-  value_swap(count(), parent(), position());
+  value_move_construct(count(), parent(), position());
 
   // Move the values from the right to the left node.
   for (int i = 0; i < src->count(); ++i) {
-    value_init(1 + count() + i);
-    value_swap(1 + count() + i, src, i);
+    value_move_construct(1 + count() + i, src, i);
     src->value_destroy(i);
   }
 
@@ -1658,39 +1701,36 @@ template <typename P>
 void btree_node<P>::swap(btree_node *x) {
   assert(leaf() == x->leaf());
 
+  btree_node *y = this;
+  if (x->count() > y->count()) btree_swap_helper(x, y);
+
+  // invariant: x->count() <= y->count()
+
   // Swap the values.
-  for (int i = count(); i < x->count(); ++i) {
-    value_init(i);
+  for (int i = 0; i < x->count(); ++i) {
+    x->value_swap(i, y, i);
   }
-  for (int i = x->count(); i < count(); ++i) {
-    x->value_init(i);
-  }
-  int n = std::max(count(), x->count());
-  for (int i = 0; i < n; ++i) {
-    value_swap(i, x, i);
-  }
-  for (int i = count(); i < x->count(); ++i) {
-    x->value_destroy(i);
-  }
-  for (int i = x->count(); i < count(); ++i) {
-    value_destroy(i);
+  for (int i = x->count(); i < y->count(); ++i) {
+    x->value_move_construct(i, y, i);
+    y->value_destroy(i);
   }
 
-  if (!leaf()) {
+  if (!x->leaf()) {
     // Swap the child pointers.
+    int n = std::max(x->count(), y->count());
     for (int i = 0; i <= n; ++i) {
-      btree_swap_helper(*mutable_child(i), *x->mutable_child(i));
+      btree_swap_helper(*x->mutable_child(i), *y->mutable_child(i));
     }
-    for (int i = 0; i <= count(); ++i) {
+    for (int i = 0; i <= y->count(); ++i) {
       x->child(i)->fields_.parent = x;
     }
     for (int i = 0; i <= x->count(); ++i) {
-      child(i)->fields_.parent = this;
+      y->child(i)->fields_.parent = y;
     }
   }
 
   // Swap the counts.
-  btree_swap_helper(fields_.count, x->fields_.count);
+  btree_swap_helper(y->fields_.count, x->fields_.count);
 }
 
 ////
@@ -1903,7 +1943,7 @@ typename btree<P>::iterator btree<P>::erase(iterator iter) {
     iterator tmp_iter(iter--);
     assert(iter.node->leaf());
     assert(!compare_keys(tmp_iter.key(), iter.key()));
-    iter.node->value_swap(iter.position, tmp_iter.node, tmp_iter.position);
+    tmp_iter.node->value_move(tmp_iter.position, iter.node, iter.position);
     internal_delete = true;
     --*mutable_size();
   } else if (!root()->leaf()) {
@@ -2387,6 +2427,7 @@ void btree<P>::internal_clear(node_type *node) {
   }
 }
 
+#ifndef BTREE_NO_IOSTREAM
 template <typename P>
 void btree<P>::internal_dump(
     std::ostream &os, const node_type *node, int level) const {
@@ -2403,6 +2444,7 @@ void btree<P>::internal_dump(
     internal_dump(os, node->child(node->count()), level + 1);
   }
 }
+#endif
 
 template <typename P>
 int btree<P>::internal_verify(

@@ -84,6 +84,14 @@ class safe_btree_iterator {
     update();
   }
 
+  safe_btree_iterator &operator=(const iterator &x) {
+    this->generation_ = x.generation();
+    this->key_ = x.key();
+    this->iter_ = x.iter();
+    this->tree_ = x.tree();
+    return *this;
+  }
+
   Tree* tree() const { return tree_; }
   int64_t generation() const { return generation_; }
 
@@ -108,12 +116,18 @@ class safe_btree_iterator {
   }
 
   // Equality/inequality operators.
+#if defined(__cplusplus) && __cplusplus >= 202002L
+  friend bool operator==(const safe_btree_iterator &a, const safe_btree_iterator &b) noexcept {
+    return a.iter() == b.iter();
+  }
+#else
   bool operator==(const const_iterator &x) const {
     return iter() == x.iter();
   }
   bool operator!=(const const_iterator &x) const {
     return iter() != x.iter();
   }
+#endif
 
   // Accessors for the key/value the iterator is pointing at.
   const key_type& key() const {
@@ -387,9 +401,11 @@ class safe_btree {
     ++x.generation_;
     tree_.swap(x.tree_);
   }
+#ifndef BTREE_NO_IOSTREAM
   void dump(std::ostream &os) const {
     tree_.dump(os);
   }
+#endif
   void verify() const {
     tree_.verify();
   }
