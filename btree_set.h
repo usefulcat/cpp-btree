@@ -33,12 +33,16 @@ namespace btree {
 template <typename Key,
           typename Compare = std::less<Key>,
           typename Alloc = std::allocator<Key>,
-          int TargetNodeSize = 256>
+          int TargetNodeSize = 256,
+          int UseLinearSearch = -1>
 class btree_set : public btree_unique_container<
-  btree<btree_set_params<Key, Compare, Alloc, TargetNodeSize> > > {
+  btree<btree_set_params<
+    Key, Compare, Alloc, TargetNodeSize, UseLinearSearch> > > {
 
-  typedef btree_set<Key, Compare, Alloc, TargetNodeSize> self_type;
-  typedef btree_set_params<Key, Compare, Alloc, TargetNodeSize> params_type;
+  typedef btree_set<
+    Key, Compare, Alloc, TargetNodeSize, UseLinearSearch> self_type;
+  typedef btree_set_params<
+    Key, Compare, Alloc, TargetNodeSize, UseLinearSearch> params_type;
   typedef btree<params_type> btree_type;
   typedef btree_unique_container<btree_type> super_type;
 
@@ -88,12 +92,16 @@ inline void swap(btree_set<K, C, A, N> &x, btree_set<K, C, A, N> &y) {
 template <typename Key,
           typename Compare = std::less<Key>,
           typename Alloc = std::allocator<Key>,
-          int TargetNodeSize = 256>
+          int TargetNodeSize = 256,
+          int UseLinearSearch = -1>
 class btree_multiset : public btree_multi_container<
-  btree<btree_set_params<Key, Compare, Alloc, TargetNodeSize> > > {
+  btree<btree_set_params<
+    Key, Compare, Alloc, TargetNodeSize, UseLinearSearch> > > {
 
-  typedef btree_multiset<Key, Compare, Alloc, TargetNodeSize> self_type;
-  typedef btree_set_params<Key, Compare, Alloc, TargetNodeSize> params_type;
+  typedef btree_multiset<
+    Key, Compare, Alloc, TargetNodeSize, UseLinearSearch> self_type;
+  typedef btree_set_params<
+    Key, Compare, Alloc, TargetNodeSize, UseLinearSearch> params_type;
   typedef btree<params_type> btree_type;
   typedef btree_multi_container<btree_type> super_type;
 

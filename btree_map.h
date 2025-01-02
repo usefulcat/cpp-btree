@@ -37,13 +37,16 @@ namespace btree {
 template <typename Key, typename Value,
           typename Compare = std::less<Key>,
           typename Alloc = std::allocator<std::pair<const Key, Value> >,
-          int TargetNodeSize = 256>
+          int TargetNodeSize = 256,
+          int UseLinearSearch = -1>
 class btree_map : public btree_map_container<
-  btree<btree_map_params<Key, Value, Compare, Alloc, TargetNodeSize> > > {
+  btree<btree_map_params<
+    Key, Value, Compare, Alloc, TargetNodeSize, UseLinearSearch> > > {
 
-  typedef btree_map<Key, Value, Compare, Alloc, TargetNodeSize> self_type;
+  typedef btree_map<
+    Key, Value, Compare, Alloc, TargetNodeSize, UseLinearSearch> self_type;
   typedef btree_map_params<
-    Key, Value, Compare, Alloc, TargetNodeSize> params_type;
+    Key, Value, Compare, Alloc, TargetNodeSize, UseLinearSearch> params_type;
   typedef btree<params_type> btree_type;
   typedef btree_map_container<btree_type> super_type;
 
@@ -94,13 +97,16 @@ inline void swap(btree_map<K, V, C, A, N> &x,
 template <typename Key, typename Value,
           typename Compare = std::less<Key>,
           typename Alloc = std::allocator<std::pair<const Key, Value> >,
-          int TargetNodeSize = 256>
+          int TargetNodeSize = 256,
+          int UseLinearSearch = -1>
 class btree_multimap : public btree_multi_container<
-  btree<btree_map_params<Key, Value, Compare, Alloc, TargetNodeSize> > > {
+  btree<btree_map_params<
+    Key, Value, Compare, Alloc, TargetNodeSize, UseLinearSearch> > > {
 
-  typedef btree_multimap<Key, Value, Compare, Alloc, TargetNodeSize> self_type;
+  typedef btree_multimap<
+    Key, Value, Compare, Alloc, TargetNodeSize, UseLinearSearch> self_type;
   typedef btree_map_params<
-    Key, Value, Compare, Alloc, TargetNodeSize> params_type;
+    Key, Value, Compare, Alloc, TargetNodeSize, UseLinearSearch> params_type;
   typedef btree<params_type> btree_type;
   typedef btree_multi_container<btree_type> super_type;
 

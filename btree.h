@@ -261,8 +261,12 @@ static bool btree_compare_keys(
   return key_comparer::bool_compare(comp, x, y);
 }
 
-template <typename Key, typename Compare,
-          typename Alloc, int TargetNodeSize, int ValueSize>
+// UseLinearSearch:
+// If gt 0: use linear search
+// If eq 0: use binary search
+// If lt 0: use default behavior (linear search only for integral types)
+template <typename Key, typename Compare, typename Alloc,
+          int TargetNodeSize, int ValueSize, int UseLinearSearch>
 struct btree_common_params {
   // If Compare is derived from btree_key_compare_to_tag then use it as the
   // key_compare type. Otherwise, use btree_key_compare_to_adapter<> which will
@@ -285,6 +289,17 @@ struct btree_common_params {
     // Available space for values.  This is largest for leaf nodes,
     // which has overhead no fewer than two pointers.
     kNodeValueSpace = TargetNodeSize - 2 * sizeof(void*),
+
+    // If the key is an integral or floating point type, use linear search which
+    // is faster than binary search for such types. Might be wise to also
+    // configure linear search based on node-size.
+    // Note: although the template param is an int, this value is effectively
+    // a bool.
+    kUseLinearSearch =
+      (UseLinearSearch < 0
+        ? (std::is_integral<Key>::value ||
+          std::is_floating_point<Key>::value)
+        : !!(UseLinearSearch)),
   };
 
   // This is an integral type large enough to hold as many
@@ -297,10 +312,11 @@ struct btree_common_params {
 
 // A parameters structure for holding the type parameters for a btree_map.
 template <typename Key, typename Data, typename Compare,
-          typename Alloc, int TargetNodeSize>
+          typename Alloc, int TargetNodeSize, int UseLinearSearch = -1>
 struct btree_map_params
     : public btree_common_params<Key, Compare, Alloc, TargetNodeSize,
-                                 sizeof(Key) + sizeof(Data)> {
+                                 sizeof(Key) + sizeof(Data),
+                                 UseLinearSearch> {
   typedef Data data_type;
   typedef Data mapped_type;
   typedef std::pair<const Key, data_type> value_type;
@@ -338,10 +354,11 @@ struct btree_map_params
 };
 
 // A parameters structure for holding the type parameters for a btree_set.
-template <typename Key, typename Compare, typename Alloc, int TargetNodeSize>
+template <typename Key, typename Compare, typename Alloc,
+          int TargetNodeSize, int UseLinearSearch = -1>
 struct btree_set_params
     : public btree_common_params<Key, Compare, Alloc, TargetNodeSize,
-                                 sizeof(Key)> {
+                                 sizeof(Key), UseLinearSearch> {
   typedef std::false_type data_type;
   typedef std::false_type mapped_type;
   typedef Key value_type;
@@ -480,12 +497,8 @@ class btree_node {
     Params::is_key_compare_to::value,
     binary_search_compare_to_type,
     binary_search_plain_compare_type>::type binary_search_type;
-  // If the key is an integral or floating point type, use linear search which
-  // is faster than binary search for such types. Might be wise to also
-  // configure linear search based on node-size.
   typedef typename if_<
-    std::is_integral<key_type>::value ||
-    std::is_floating_point<key_type>::value,
+    Params::kUseLinearSearch,
     linear_search_type, binary_search_type>::type search_type;
 
   struct base_fields {
